@@ -13,9 +13,7 @@ MAX_RESULTS = 6
 class CategoryRequest(BaseModel):
     category: str
 
-
 # ---------------- KEYWORDS ---------------- #
-
 def generate_keywords(category):
     if category.lower() == "perfume":
         return [
@@ -30,9 +28,7 @@ def generate_keywords(category):
         ]
     return [category]
 
-
 # ---------------- HELPERS ---------------- #
-
 def extract_price(text):
     try:
         text = text.replace(",", ".")
@@ -43,17 +39,13 @@ def extract_price(text):
         pass
     return None
 
-
 def evaluate_deal(price, old_price):
     if not price or not old_price:
         return None
-    
     if price > MAX_PRICE:
         return None
-
     saving = old_price - price
     discount = (saving / old_price) * 100
-
     return {
         "price": price,
         "original_price": old_price,
@@ -61,35 +53,39 @@ def evaluate_deal(price, old_price):
         "discount_percent": round(discount, 2)
     }
 
+def is_available(link):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(link, headers=headers, timeout=10)
+        if "Out of stock" in r.text or "Indisponible" in r.text:
+            return False
+        return True
+    except:
+        return False
 
 # ---------------- SCRAPERS ---------------- #
-
 def search_notino(keyword):
     url = f"https://www.notino.fr/search.asp?exps={keyword}"
     headers = {"User-Agent": "Mozilla/5.0"}
     r = requests.get(url, headers=headers, timeout=10)
     soup = BeautifulSoup(r.text, "lxml")
     results = []
-
     products = soup.select(".product-item")
     for p in products[:10]:
         try:
-            title = p.select_one(".product-item-title").text.strip()
+            title_tag = p.select_one(".product-item-title")
             prices = p.select(".price")
-            if len(prices) >= 2:
+            if title_tag and len(prices) >= 2:
+                title = title_tag.text.strip()
                 old_price = extract_price(prices[0].text)
                 price = extract_price(prices[1].text)
+                link = "https://www.notino.fr"
                 deal = evaluate_deal(price, old_price)
-                if deal:
-                    results.append({
-                        "title": title,
-                        "link": "https://www.notino.fr",
-                        **deal
-                    })
+                if deal and is_available(link):
+                    results.append({"title": title, "link": link, **deal})
         except:
             continue
     return results
-
 
 def search_sephora(keyword):
     url = f"https://www.sephora.fr/search?q={keyword}"
@@ -97,28 +93,24 @@ def search_sephora(keyword):
     r = requests.get(url, headers=headers, timeout=10)
     soup = BeautifulSoup(r.text, "lxml")
     results = []
-
     products = soup.select("div.ProductTile")
     for p in products[:10]:
         try:
             title_tag = p.select_one("a.ProductTile-link")
-            title = title_tag.text.strip()
             price_tag = p.select_one("span.ProductTile-price")
-            price_texts = re.findall(r"\d+,\d+", price_tag.text)
-            if len(price_texts) >= 2:
-                old_price = float(price_texts[0].replace(",", "."))
-                price = float(price_texts[1].replace(",", "."))
-                deal = evaluate_deal(price, old_price)
-                if deal:
-                    results.append({
-                        "title": title,
-                        "link": "https://www.sephora.fr",
-                        **deal
-                    })
+            if title_tag and price_tag:
+                title = title_tag.text.strip()
+                prices = re.findall(r"\d+,\d+", price_tag.text)
+                if len(prices) >= 2:
+                    old_price = float(prices[0].replace(",", "."))
+                    price = float(prices[1].replace(",", "."))
+                    link = "https://www.sephora.fr"
+                    deal = evaluate_deal(price, old_price)
+                    if deal and is_available(link):
+                        results.append({"title": title, "link": link, **deal})
         except:
             continue
     return results
-
 
 def search_zalando(keyword):
     url = f"https://www.zalando.fr/catalog/?q={keyword}"
@@ -126,7 +118,6 @@ def search_zalando(keyword):
     r = requests.get(url, headers=headers, timeout=10)
     soup = BeautifulSoup(r.text, "lxml")
     results = []
-
     products = soup.select("article")
     for p in products[:10]:
         try:
@@ -135,24 +126,66 @@ def search_zalando(keyword):
             if len(prices) >= 2:
                 old_price = float(prices[0].replace(",", "."))
                 price = float(prices[1].replace(",", "."))
+                link = "https://www.zalando.fr"
                 deal = evaluate_deal(price, old_price)
-                if deal:
-                    results.append({
-                        "title": title,
-                        "link": "https://www.zalando.fr",
-                        **deal
-                    })
+                if deal and is_available(link):
+                    results.append({"title": title, "link": link, **deal})
         except:
             continue
     return results
 
+def search_marionnaud(keyword):
+    url = f"https://www.marionnaud.fr/search?q={keyword}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, timeout=10)
+    soup = BeautifulSoup(r.text, "lxml")
+    results = []
+    products = soup.select("div.product-tile")
+    for p in products[:10]:
+        try:
+            title_tag = p.select_one("a.product-name")
+            price_tag = p.select_one("span.price")
+            old_price_tag = p.select_one("span.price-old")
+            if title_tag and price_tag and old_price_tag:
+                title = title_tag.text.strip()
+                price = extract_price(price_tag.text)
+                old_price = extract_price(old_price_tag.text)
+                link = "https://www.marionnaud.fr"
+                deal = evaluate_deal(price, old_price)
+                if deal and is_available(link):
+                    results.append({"title": title, "link": link, **deal})
+        except:
+            continue
+    return results
+
+def search_nocibe(keyword):
+    url = f"https://www.nocibe.fr/search?q={keyword}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, timeout=10)
+    soup = BeautifulSoup(r.text, "lxml")
+    results = []
+    products = soup.select("div.product-item")
+    for p in products[:10]:
+        try:
+            title_tag = p.select_one("a.product-title")
+            price_tag = p.select_one("span.price")
+            old_price_tag = p.select_one("span.price-old")
+            if title_tag and price_tag and old_price_tag:
+                title = title_tag.text.strip()
+                price = extract_price(price_tag.text)
+                old_price = extract_price(old_price_tag.text)
+                link = "https://www.nocibe.fr"
+                deal = evaluate_deal(price, old_price)
+                if deal and is_available(link):
+                    results.append({"title": title, "link": link, **deal})
+        except:
+            continue
+    return results
 
 # ---------------- MAIN ROUTE ---------------- #
-
 @app.get("/")
 def root():
     return {"status": "Deal Finder API running"}
-
 
 @app.post("/search")
 def search_deals(data: CategoryRequest):
@@ -160,11 +193,15 @@ def search_deals(data: CategoryRequest):
     all_results = []
 
     def run_search(keyword):
-        return search_notino(keyword) + search_sephora(keyword) + search_zalando(keyword)
+        return (
+            search_notino(keyword) + 
+            search_sephora(keyword) + 
+            search_zalando(keyword) +
+            search_marionnaud(keyword) +
+            search_nocibe(keyword)
+        )
 
-    # run parallel for faster scraping
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(run_search, kw) for kw in keywords]
         for future in concurrent.futures.as_completed(futures):
             all_results.extend(future.result())
@@ -172,5 +209,4 @@ def search_deals(data: CategoryRequest):
     # sort by saving descending
     all_results = sorted(all_results, key=lambda x: x["saving"], reverse=True)
 
-    # return top MAX_RESULTS deals
     return {"category": data.category, "results": all_results[:MAX_RESULTS]}
