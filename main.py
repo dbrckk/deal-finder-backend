@@ -19,22 +19,14 @@ class CategoryRequest(BaseModel):
 def generate_keywords(category):
     if category.lower() == "perfume":
         return [
-            "parfum soldes",
-            "parfum promotion",
-            "eau de parfum reduction",
-            "fragrance clearance",
-            "luxury perfume discount",
-            "parfum 50%",
-            "parfum -40%"
+            "parfum soldes", "parfum promotion", "eau de parfum reduction",
+            "fragrance clearance", "luxury perfume discount",
+            "parfum 50%", "parfum -40%"
         ]
     if category.lower() == "jewelry":
         return [
-            "bijoux soldes",
-            "collier or promotion",
-            "bracelet argent reduction",
-            "bague diamant soldes",
-            "luxury jewelry discount",
-            "montre luxe -40%"
+            "bijoux soldes", "collier or promotion", "bracelet argent reduction",
+            "bague diamant soldes", "luxury jewelry discount", "montre luxe -40%"
         ]
     return [category]
 
@@ -62,15 +54,12 @@ def evaluate_deal(price, old_price):
     saving = old_price - price
     discount = (saving / old_price) * 100
 
-    if discount >= 40 or saving >= 300:
-        return {
-            "price": price,
-            "original_price": old_price,
-            "saving": round(saving, 2),
-            "discount_percent": round(discount, 2)
-        }
-
-    return None
+    return {
+        "price": price,
+        "original_price": old_price,
+        "saving": round(saving, 2),
+        "discount_percent": round(discount, 2)
+    }
 
 
 # ---------------- SCRAPERS ---------------- #
@@ -80,33 +69,54 @@ def search_notino(keyword):
     headers = {"User-Agent": "Mozilla/5.0"}
     r = requests.get(url, headers=headers, timeout=10)
     soup = BeautifulSoup(r.text, "lxml")
-
     results = []
 
     products = soup.select(".product-item")
-
     for p in products[:10]:
         try:
             title = p.select_one(".product-item-title").text.strip()
             prices = p.select(".price")
-
             if len(prices) >= 2:
                 old_price = extract_price(prices[0].text)
                 price = extract_price(prices[1].text)
-            else:
-                continue
-
-            deal = evaluate_deal(price, old_price)
-            if deal:
-                results.append({
-                    "title": title,
-                    "link": "https://www.notino.fr",
-                    **deal
-                })
-
+                deal = evaluate_deal(price, old_price)
+                if deal:
+                    results.append({
+                        "title": title,
+                        "link": "https://www.notino.fr",
+                        **deal
+                    })
         except:
             continue
+    return results
 
+
+def search_sephora(keyword):
+    url = f"https://www.sephora.fr/search?q={keyword}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, timeout=10)
+    soup = BeautifulSoup(r.text, "lxml")
+    results = []
+
+    products = soup.select("div.ProductTile")
+    for p in products[:10]:
+        try:
+            title_tag = p.select_one("a.ProductTile-link")
+            title = title_tag.text.strip()
+            price_tag = p.select_one("span.ProductTile-price")
+            price_texts = re.findall(r"\d+,\d+", price_tag.text)
+            if len(price_texts) >= 2:
+                old_price = float(price_texts[0].replace(",", "."))
+                price = float(price_texts[1].replace(",", "."))
+                deal = evaluate_deal(price, old_price)
+                if deal:
+                    results.append({
+                        "title": title,
+                        "link": "https://www.sephora.fr",
+                        **deal
+                    })
+        except:
+            continue
     return results
 
 
@@ -115,32 +125,25 @@ def search_zalando(keyword):
     headers = {"User-Agent": "Mozilla/5.0"}
     r = requests.get(url, headers=headers, timeout=10)
     soup = BeautifulSoup(r.text, "lxml")
-
     results = []
-    products = soup.select("article")
 
+    products = soup.select("article")
     for p in products[:10]:
         try:
             title = p.text[:80]
             prices = re.findall(r"\d+,\d+", p.text)
-
             if len(prices) >= 2:
                 old_price = float(prices[0].replace(",", "."))
                 price = float(prices[1].replace(",", "."))
-            else:
-                continue
-
-            deal = evaluate_deal(price, old_price)
-            if deal:
-                results.append({
-                    "title": title,
-                    "link": "https://www.zalando.fr",
-                    **deal
-                })
-
+                deal = evaluate_deal(price, old_price)
+                if deal:
+                    results.append({
+                        "title": title,
+                        "link": "https://www.zalando.fr",
+                        **deal
+                    })
         except:
             continue
-
     return results
 
 
@@ -154,11 +157,20 @@ def root():
 @app.post("/search")
 def search_deals(data: CategoryRequest):
     keywords = generate_keywords(data.category)
-
     all_results = []
 
     def run_search(keyword):
-        return search_notino(keyword) + search_zalando(keyword)
+        return search_notino(keyword) + search_sephora(keyword) + search_zalando(keyword)
 
+    # run parallel for faster scraping
+    import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(run_search, kw) for kw in keywords]
+        for future in concurrent.futures.as_completed(futures):
+            all_results.extend(future.result())
+
+    # sort by saving descending
+    all_results = sorted(all_results, key=lambda x: x["saving"], reverse=True)
+
+    # return top MAX_RESULTS deals
+    return {"category": data.category, "results": all_results[:MAX_RESULTS]}
