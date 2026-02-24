@@ -1,62 +1,68 @@
-from fastapi import FastAPI
+# src/main.py
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os
-import requests
+import random
 
 app = FastAPI()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# ========================
+# CORS
+# ========================
+origins = [
+    "*",  # Allow all origins (mobile + web)
+]
 
-class SearchRequest(BaseModel):
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ========================
+# DATA MODELS
+# ========================
+class GenerateRequest(BaseModel):
     category: str
 
+class VerifyRequest(BaseModel):
+    url: str
 
-def generate_keywords(category):
-    if not GROQ_API_KEY:
-        return ["ERROR: Missing GROQ_API_KEY"]
+# ========================
+# ENDPOINTS
+# ========================
 
-    url = "https://api.groq.com/openai/v1/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    prompt = f"Generate 10 shopping keywords for {category}. Return comma separated."
-
-    data = {
-       "model": "llama-3.1-8b-instant" ,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ]
-    }
-
+@app.post("/generate-keywords")
+async def generate_keywords(req: GenerateRequest):
+    """
+    Simulate LLM-generated items for a category
+    """
     try:
-        response = requests.post(url, headers=headers, json=data)
-        result = response.json()
-
-        if "choices" not in result:
-            return [f"Groq error: {result}"]
-
-        content = result["choices"][0]["message"]["content"]
-        keywords = [k.strip() for k in content.split(",")]
-
-        return keywords
-
+        category = req.category
+        # Example: generate 5 fake items
+        items = [f"{category.capitalize()} Deal {i+1}" for i in range(5)]
+        return {"category": category, "generated_keywords": items}
     except Exception as e:
-        return [f"Server crash: {str(e)}"]
+        raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/verify")
+async def verify_item(req: VerifyRequest):
+    """
+    Simulate verification of URL stock
+    """
+    try:
+        # Randomly decide if available
+        status = random.choice(["available", "unavailable"])
+        reason = "" if status == "available" else "Rupture de stock"
+        return {"status": status, "reason": reason}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/search")
-def search_products(request: SearchRequest):
-    keywords = generate_keywords(request.category)
-
-    return {
-        "category": request.category,
-        "generated_keywords": keywords
-    }
-
-
+# ========================
+# ROOT
+# ========================
 @app.get("/")
-def root():
-    return {"status": "Groq backend running"}
+async def root():
+    return {"message": "GlitchPrice Finder backend is running."}
