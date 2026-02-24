@@ -10,7 +10,11 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 class SearchRequest(BaseModel):
     category: str
 
+
 def generate_keywords(category):
+    if not GROQ_API_KEY:
+        return ["ERROR: Missing GROQ_API_KEY"]
+
     url = "https://api.groq.com/openai/v1/chat/completions"
 
     headers = {
@@ -18,27 +22,29 @@ def generate_keywords(category):
         "Content-Type": "application/json"
     }
 
-    prompt = f"""
-    Generate 12 shopping search keywords in English and French
-    related to this category: {category}.
-    Only return a comma separated list.
-    """
+    prompt = f"Generate 10 shopping keywords for {category}. Return comma separated."
 
     data = {
         "model": "llama3-8b-8192",
         "messages": [
             {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.7
+        ]
     }
 
-    response = requests.post(url, headers=headers, json=data)
-    result = response.json()
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        result = response.json()
 
-    content = result["choices"][0]["message"]["content"]
-    keywords = [k.strip() for k in content.split(",")]
+        if "choices" not in result:
+            return [f"Groq error: {result}"]
 
-    return keywords
+        content = result["choices"][0]["message"]["content"]
+        keywords = [k.strip() for k in content.split(",")]
+
+        return keywords
+
+    except Exception as e:
+        return [f"Server crash: {str(e)}"]
 
 
 @app.post("/search")
