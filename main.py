@@ -25,7 +25,7 @@ def generate_keywords(category):
     prompt = f"Generate 10 shopping keywords for {category}. Return comma separated."
 
     data = {
-       "model": "llama-3.1-8b-instant" ,,
+       "model": "llama-3.1-8b-instant" ,
         "messages": [
             {"role": "user", "content": prompt}
         ]
