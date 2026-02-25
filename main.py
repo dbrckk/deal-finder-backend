@@ -95,4 +95,4 @@ def verify_item(req: VerifyRequest):
     return {
         "status": status,
         "reason": reason
-}
+    }
