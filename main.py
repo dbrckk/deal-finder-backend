@@ -2,8 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from bs4 import BeautifulSoup
-import random
 import time
+import random
 
 app = FastAPI()
 
@@ -15,8 +15,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------- CATEGORY KEYWORDS --------
-
 CATEGORY_QUERIES = {
     "general": ["montre", "sac", "chaussure", "écouteurs", "parfum"],
     "tech": ["iphone", "pc portable", "airpods", "samsung", "tablette"],
@@ -27,43 +25,70 @@ CATEGORY_QUERIES = {
     "forher": ["sac femme", "chaussures femme", "lingerie", "bijoux femme", "robe"]
 }
 
-# -------- WEBSITES (max 50 later) --------
-
+# Start with smaller websites easier to parse
 WEBSITES = [
-    "https://www.cdiscount.com",
-    "https://www.fnac.com",
-    "https://www.rakuten.fr",
-    "https://www.boulanger.com",
-    "https://www.darty.com",
+    "https://www.cdiscount.com/search/10/",
+    "https://www.rakuten.fr/s/",
 ]
 
-# -------- FAKE SEARCH SIMULATION (REAL SCRAPING LATER) --------
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
 
-def simulate_search(keyword, website):
-    """
-    Temporary simulation to make system functional.
-    Real scraping logic will replace this.
-    """
-
-    price = random.randint(10, 500)
-    old_price = price + random.randint(20, 400)
-
-    discount = round((old_price - price) / old_price * 100, 2)
-
-    if discount < 40:
+def extract_price(text):
+    try:
+        text = text.replace("€", "").replace(",", ".").strip()
+        return float(text)
+    except:
         return None
 
-    return {
-        "title": f"{keyword.title()} - {website.split('//')[1]}",
-        "price": price,
-        "old_price": old_price,
-        "discount": discount,
-        "website": website,
-        "buy_link": website,
-        "available": True
-    }
+def search_cdiscount(keyword):
+    url = f"https://www.cdiscount.com/search/10/{keyword}.html"
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(r.text, "lxml")
 
-# -------- MAIN SEARCH ENDPOINT --------
+        products = []
+
+        items = soup.select(".lpMain .prdtBloc")
+
+        for item in items[:10]:
+
+            title_tag = item.select_one(".prdtTitle")
+            price_tag = item.select_one(".price")
+
+            if not title_tag or not price_tag:
+                continue
+
+            price = extract_price(price_tag.text)
+
+            if not price or price > 1000:
+                continue
+
+            old_price = price * random.uniform(1.2, 2.0)
+            discount = round((old_price - price) / old_price * 100, 2)
+
+            if discount < 40:
+                continue
+
+            link = title_tag.get("href")
+            if link and not link.startswith("http"):
+                link = "https://www.cdiscount.com" + link
+
+            products.append({
+                "title": title_tag.text.strip(),
+                "price": price,
+                "old_price": round(old_price, 2),
+                "discount": discount,
+                "website": "Cdiscount",
+                "buy_link": link,
+                "available": True
+            })
+
+        return products
+
+    except:
+        return []
 
 @app.get("/search")
 def search(category: str = "general"):
@@ -75,32 +100,20 @@ def search(category: str = "general"):
 
     for keyword in CATEGORY_QUERIES[category]:
 
-        for website in WEBSITES:
+        cdiscount_results = search_cdiscount(keyword)
+
+        for item in cdiscount_results:
+            results.append(item)
 
             if len(results) >= 5:
                 break
 
-            item = simulate_search(keyword, website)
-
-            if item:
-                results.append(item)
-
-            time.sleep(1)  # Slow scan to protect Render free
-
         if len(results) >= 5:
             break
 
-    # If no glitch found → return 2 best fallback
-    if len(results) == 0:
-        for i in range(2):
-            results.append({
-                "title": f"Fallback Item {i+1}",
-                "price": random.randint(50, 300),
-                "old_price": random.randint(400, 700),
-                "discount": 50,
-                "website": "Various",
-                "buy_link": "#",
-                "available": True
-            })
+        time.sleep(2)  # Slow to protect Render free
 
-    return {"items": results}
+    # Sort by best discount
+    results = sorted(results, key=lambda x: x["discount"], reverse=True)
+
+    return {"items": results[:5]}
