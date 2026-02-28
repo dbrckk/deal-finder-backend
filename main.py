@@ -15,6 +15,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -------- CATEGORY KEYWORDS --------
+
 CATEGORY_QUERIES = {
     "general": ["montre", "sac", "chaussure", "écouteurs", "parfum"],
     "tech": ["iphone", "pc portable", "airpods", "samsung", "tablette"],
@@ -25,30 +27,30 @@ CATEGORY_QUERIES = {
     "forher": ["sac femme", "chaussures femme", "lingerie", "bijoux femme", "robe"]
 }
 
-# Start with smaller websites easier to parse
-WEBSITES = [
-    "https://www.cdiscount.com/search/10/",
-    "https://www.rakuten.fr/s/",
-]
-
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
+# -------- HELPERS --------
+
 def extract_price(text):
     try:
-        text = text.replace("€", "").replace(",", ".").strip()
+        text = text.replace("€", "").replace(",", ".")
+        text = ''.join(c for c in text if c.isdigit() or c == ".")
         return float(text)
     except:
         return None
 
+
+# -------- CDISCOUNT --------
+
 def search_cdiscount(keyword):
     url = f"https://www.cdiscount.com/search/10/{keyword}.html"
+    products = []
+
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "lxml")
-
-        products = []
 
         items = soup.select(".lpMain .prdtBloc")
 
@@ -61,14 +63,19 @@ def search_cdiscount(keyword):
                 continue
 
             price = extract_price(price_tag.text)
-
             if not price or price > 1000:
                 continue
 
-            old_price = price * random.uniform(1.2, 2.0)
+            # Try real old price if exists
+            old_price_tag = item.select_one(".strike")
+            if old_price_tag:
+                old_price = extract_price(old_price_tag.text)
+            else:
+                old_price = price * random.uniform(1.2, 1.8)
+
             discount = round((old_price - price) / old_price * 100, 2)
 
-            if discount < 40:
+            if discount < 35:
                 continue
 
             link = title_tag.get("href")
@@ -90,6 +97,64 @@ def search_cdiscount(keyword):
     except:
         return []
 
+
+# -------- RAKUTEN --------
+
+def search_rakuten(keyword):
+    url = f"https://www.rakuten.fr/s/{keyword}"
+    products = []
+
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(r.text, "lxml")
+
+        items = soup.select(".search-result-item")
+
+        for item in items[:10]:
+
+            title_tag = item.select_one(".title")
+            price_tag = item.select_one(".main-price")
+
+            if not title_tag or not price_tag:
+                continue
+
+            price = extract_price(price_tag.text)
+            if not price or price > 1000:
+                continue
+
+            old_price_tag = item.select_one(".crossed-price")
+            if old_price_tag:
+                old_price = extract_price(old_price_tag.text)
+            else:
+                old_price = price * random.uniform(1.2, 1.7)
+
+            discount = round((old_price - price) / old_price * 100, 2)
+
+            if discount < 35:
+                continue
+
+            link = title_tag.get("href")
+            if link and not link.startswith("http"):
+                link = "https://www.rakuten.fr" + link
+
+            products.append({
+                "title": title_tag.text.strip(),
+                "price": price,
+                "old_price": round(old_price, 2),
+                "discount": discount,
+                "website": "Rakuten",
+                "buy_link": link,
+                "available": True
+            })
+
+        return products
+
+    except:
+        return []
+
+
+# -------- MAIN SEARCH --------
+
 @app.get("/search")
 def search(category: str = "general"):
 
@@ -100,18 +165,16 @@ def search(category: str = "general"):
 
     for keyword in CATEGORY_QUERIES[category]:
 
-        cdiscount_results = search_cdiscount(keyword)
+        # Cdiscount
+        results.extend(search_cdiscount(keyword))
 
-        for item in cdiscount_results:
-            results.append(item)
+        # Rakuten
+        results.extend(search_rakuten(keyword))
 
-            if len(results) >= 5:
-                break
-
-        if len(results) >= 5:
+        if len(results) >= 15:
             break
 
-        time.sleep(2)  # Slow to protect Render free
+        time.sleep(2)  # protect Render free
 
     # Sort by best discount
     results = sorted(results, key=lambda x: x["discount"], reverse=True)
