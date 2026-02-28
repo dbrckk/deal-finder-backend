@@ -15,6 +15,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -------- CATEGORY KEYWORDS --------
+
 CATEGORY_QUERIES = {
     "general": ["montre", "sac", "chaussure", "écouteurs", "parfum"],
     "tech": ["iphone", "pc portable", "airpods", "samsung", "tablette"],
@@ -28,6 +30,8 @@ CATEGORY_QUERIES = {
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
+
+# -------- HELPERS --------
 
 def extract_price(text):
     try:
@@ -57,6 +61,8 @@ def verify_availability(url):
     except:
         return False
 
+
+# -------- CDISCOUNT --------
 
 def search_cdiscount(keyword):
     url = f"https://www.cdiscount.com/search/10/{keyword}.html"
@@ -110,6 +116,8 @@ def search_cdiscount(keyword):
         return []
 
 
+# -------- RAKUTEN --------
+
 def search_rakuten(keyword):
     url = f"https://www.rakuten.fr/s/{keyword}"
     products = []
@@ -162,6 +170,8 @@ def search_rakuten(keyword):
         return []
 
 
+# -------- MAIN SEARCH --------
+
 @app.get("/search")
 def search(category: str = "general"):
 
@@ -176,9 +186,14 @@ def search(category: str = "general"):
         candidates.extend(search_cdiscount(keyword))
         candidates.extend(search_rakuten(keyword))
 
-        # sort best discount first
-        candidates = sorted(candidates, key=lambda x: x["discount"], reverse=True)
+        # ---- Improved ranking ----
+        for item in candidates:
+            item["money_saved"] = round(item["old_price"] - item["price"], 2)
+            item["score"] = (item["discount"] * 2) + (item["money_saved"] / 10)
 
+        candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
+
+        # ---- Verification loop ----
         for item in candidates:
 
             if len(verified_results) >= 5:
