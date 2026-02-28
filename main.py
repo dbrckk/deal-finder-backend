@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import requests
 from bs4 import BeautifulSoup
 import time
 import random
+import json
 
 app = FastAPI()
 
@@ -30,8 +32,8 @@ HEADERS = {
 }
 
 MAX_RESULTS = 5
-MAX_KEYWORD_DEPTH = 3  # try keywords multiple times
-MAX_PER_SITE = 20      # scan deeper
+MAX_KEYWORD_DEPTH = 3
+MAX_PER_SITE = 20
 
 
 def extract_price(text):
@@ -50,12 +52,7 @@ def verify_availability(url):
             return False
 
         text = r.text.lower()
-
-        if "indisponible" in text:
-            return False
-        if "rupture" in text:
-            return False
-        if "out of stock" in text:
+        if "indisponible" in text or "rupture" in text or "out of stock" in text:
             return False
 
         return True
@@ -76,14 +73,11 @@ def search_cdiscount(keyword):
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "lxml")
-
         items = soup.select(".lpMain .prdtBloc")
 
         for item in items[:MAX_PER_SITE]:
-
             title_tag = item.select_one(".prdtTitle")
             price_tag = item.select_one(".price")
-
             if not title_tag or not price_tag:
                 continue
 
@@ -98,7 +92,6 @@ def search_cdiscount(keyword):
                 old_price = price * random.uniform(1.2, 1.8)
 
             discount = round((old_price - price) / old_price * 100, 2)
-
             if discount < 35:
                 continue
 
@@ -118,7 +111,6 @@ def search_cdiscount(keyword):
             products.append(compute_score(product))
 
         return products
-
     except:
         return []
 
@@ -130,14 +122,11 @@ def search_rakuten(keyword):
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "lxml")
-
         items = soup.select(".search-result-item")
 
         for item in items[:MAX_PER_SITE]:
-
             title_tag = item.select_one(".title")
             price_tag = item.select_one(".main-price")
-
             if not title_tag or not price_tag:
                 continue
 
@@ -152,7 +141,6 @@ def search_rakuten(keyword):
                 old_price = price * random.uniform(1.2, 1.7)
 
             discount = round((old_price - price) / old_price * 100, 2)
-
             if discount < 35:
                 continue
 
@@ -172,13 +160,12 @@ def search_rakuten(keyword):
             products.append(compute_score(product))
 
         return products
-
     except:
         return []
 
 
-@app.get("/search")
-def search(category: str = "general"):
+@app.get("/search_stream")
+def search_stream(category: str = "general"):
 
     if category not in CATEGORY_QUERIES:
         category = "general"
@@ -186,37 +173,33 @@ def search(category: str = "general"):
     verified_results = []
     scanned_count = 0
 
-    for depth in range(MAX_KEYWORD_DEPTH):
+    def event_generator():
+        for depth in range(MAX_KEYWORD_DEPTH):
+            for keyword in CATEGORY_QUERIES[category]:
+                candidates = []
+                candidates.extend(search_cdiscount(keyword))
+                candidates.extend(search_rakuten(keyword))
+                candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
 
-        for keyword in CATEGORY_QUERIES[category]:
+                for item in candidates:
+                    if len(verified_results) >= MAX_RESULTS:
+                        break
 
-            candidates = []
-            candidates.extend(search_cdiscount(keyword))
-            candidates.extend(search_rakuten(keyword))
+                    scanned_count_nonlocal = scanned_count + 1
+                    if verify_availability(item["buy_link"]):
+                        item["available"] = True
+                        verified_results.append(item)
+                        yield f"data:{json.dumps({'item': item, 'progress': len(verified_results)})}\n\n"
 
-            candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
-
-            for item in candidates:
+                    time.sleep(1)
 
                 if len(verified_results) >= MAX_RESULTS:
                     break
-
-                if verify_availability(item["buy_link"]):
-                    item["available"] = True
-                    verified_results.append(item)
-
-                scanned_count += 1
-                time.sleep(1)
+                time.sleep(2)
 
             if len(verified_results) >= MAX_RESULTS:
                 break
 
-            time.sleep(2)
+        yield f"data:{json.dumps({'finished': True, 'total_found': len(verified_results)})}\n\n"
 
-        if len(verified_results) >= MAX_RESULTS:
-            break
-
-    return {
-        "items": verified_results,
-        "scanned": scanned_count
-    }
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
