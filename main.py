@@ -55,12 +55,35 @@ def verify_availability(url):
     except:
         return False
 
-def compute_score(item):
-    item["money_saved"] = round(item["old_price"] - item["price"], 2)
+# ------------------ Coupon / Cashback Placeholder ------------------ #
+
+def check_coupon_and_cashback(item):
+    """
+    Placeholder: later connect real APIs or scrape coupons/cashback
+    For now we simulate:
+    - 10% coupon randomly
+    - 5€ cashback randomly
+    """
+    coupon = None
+    cashback = 0
+
+    if random.random() < 0.3:  # 30% chance of coupon
+        coupon = 10  # 10% off
+    if random.random() < 0.2:  # 20% chance of cashback
+        cashback = 5  # €5 cashback
+
+    # Apply coupon to price
+    price_after_coupon = item["price"]
+    if coupon:
+        price_after_coupon *= (1 - coupon / 100)
+    total_saved = (item["old_price"] - price_after_coupon) + cashback
+
+    item["coupon"] = coupon
+    item["cashback"] = cashback
+    item["money_saved"] = round(total_saved, 2)
+
+    # Recompute score with updated savings
     item["score"] = (item["discount"] * 2) + (item["money_saved"] / 10)
-    # Placeholder for coupon/cashback future integration
-    item["coupon"] = None
-    item["cashback"] = None
     return item
 
 # ------------------ Search Functions ------------------ #
@@ -96,7 +119,7 @@ def search_cdiscount(keyword):
                 "website": "Cdiscount",
                 "buy_link": link
             }
-            products.append(compute_score(product))
+            products.append(check_coupon_and_cashback(product))
         return products
     except:
         return []
@@ -132,12 +155,12 @@ def search_rakuten(keyword):
                 "website": "Rakuten",
                 "buy_link": link
             }
-            products.append(compute_score(product))
+            products.append(check_coupon_and_cashback(product))
         return products
     except:
         return []
 
-# --- Placeholder for other sites --- #
+# Placeholder search functions for other websites
 def search_fnac(keyword): return []
 def search_boulanger(keyword): return []
 def search_amazon(keyword): return []
@@ -147,7 +170,7 @@ def search_ebay(keyword): return []
 def search_veepree(keyword): return []
 def search_showroomprive(keyword): return []
 
-# ------------------ SSE Stream Endpoint ------------------ #
+# ------------------ SSE Endpoint ------------------ #
 
 @app.get("/search_stream")
 def search_stream(category: str = "general"):
@@ -155,13 +178,12 @@ def search_stream(category: str = "general"):
         category = "general"
 
     verified_results = []
-    scanned_count = 0
 
     def event_generator():
         for depth in range(MAX_KEYWORD_DEPTH):
             for keyword in CATEGORY_QUERIES[category]:
                 candidates = []
-                # Call all search functions
+                # Aggregate all searches
                 candidates.extend(search_cdiscount(keyword))
                 candidates.extend(search_rakuten(keyword))
                 candidates.extend(search_fnac(keyword))
@@ -173,17 +195,15 @@ def search_stream(category: str = "general"):
                 candidates.extend(search_veepree(keyword))
                 candidates.extend(search_showroomprive(keyword))
 
-                # Sort by score
                 candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
 
                 for item in candidates:
                     if len(verified_results) >= MAX_RESULTS:
                         break
-                    scanned_count += 1
                     if verify_availability(item["buy_link"]):
                         item["available"] = True
                         verified_results.append(item)
-                        # send live
+                        # Stream to front-end
                         yield f"data:{json.dumps({'item': item, 'progress': len(verified_results), 'keyword': keyword})}\n\n"
                     time.sleep(1)
 
@@ -194,7 +214,6 @@ def search_stream(category: str = "general"):
             if len(verified_results) >= MAX_RESULTS:
                 break
 
-        # Final message
         yield f"data:{json.dumps({'finished': True, 'total_found': len(verified_results)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
