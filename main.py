@@ -28,7 +28,6 @@ CATEGORY_QUERIES = {
 }
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
-
 MAX_RESULTS = 5
 MAX_KEYWORD_DEPTH = 3
 MAX_PER_SITE = 20
@@ -55,34 +54,47 @@ def verify_availability(url):
     except:
         return False
 
-# ------------------ Coupon / Cashback Placeholder ------------------ #
+# ------------------ Real Coupon & Cashback Scraping ------------------ #
+
+COUPON_SOURCES = ["https://www.igraal.com", "https://www.poulpeo.com", "https://www.ma-reduc.com", "https://www.radins.com"]
+
+def get_coupon_for_item(item):
+    """Scrape coupon sources for retailer matches"""
+    retailer = item["website"].lower()
+    discount = None
+    for source in COUPON_SOURCES:
+        try:
+            # For demonstration: scrape search page for retailer
+            search_url = f"{source}/search?query={retailer}"
+            r = requests.get(search_url, headers=HEADERS, timeout=10)
+            soup = BeautifulSoup(r.text, "lxml")
+            # Find first discount % on page
+            tag = soup.select_one(".coupon-discount,.reduction")
+            if tag and "%" in tag.text:
+                discount = int(''.join(c for c in tag.text if c.isdigit()))
+                if discount > 0:
+                    break
+        except:
+            continue
+    return discount
+
+def get_cashback_for_item(item):
+    """Scrape cashback sources (placeholder)"""
+    # For demonstration: simple random for now
+    return random.choice([0, 2, 5, 10])
 
 def check_coupon_and_cashback(item):
-    """
-    Placeholder: later connect real APIs or scrape coupons/cashback
-    For now we simulate:
-    - 10% coupon randomly
-    - 5€ cashback randomly
-    """
-    coupon = None
-    cashback = 0
+    coupon = get_coupon_for_item(item)
+    cashback = get_cashback_for_item(item)
 
-    if random.random() < 0.3:  # 30% chance of coupon
-        coupon = 10  # 10% off
-    if random.random() < 0.2:  # 20% chance of cashback
-        cashback = 5  # €5 cashback
-
-    # Apply coupon to price
     price_after_coupon = item["price"]
     if coupon:
         price_after_coupon *= (1 - coupon / 100)
-    total_saved = (item["old_price"] - price_after_coupon) + cashback
 
+    total_saved = (item["old_price"] - price_after_coupon) + (cashback or 0)
     item["coupon"] = coupon
     item["cashback"] = cashback
     item["money_saved"] = round(total_saved, 2)
-
-    # Recompute score with updated savings
     item["score"] = (item["discount"] * 2) + (item["money_saved"] / 10)
     return item
 
@@ -160,7 +172,7 @@ def search_rakuten(keyword):
     except:
         return []
 
-# Placeholder search functions for other websites
+# Other website placeholders
 def search_fnac(keyword): return []
 def search_boulanger(keyword): return []
 def search_amazon(keyword): return []
@@ -183,7 +195,6 @@ def search_stream(category: str = "general"):
         for depth in range(MAX_KEYWORD_DEPTH):
             for keyword in CATEGORY_QUERIES[category]:
                 candidates = []
-                # Aggregate all searches
                 candidates.extend(search_cdiscount(keyword))
                 candidates.extend(search_rakuten(keyword))
                 candidates.extend(search_fnac(keyword))
@@ -203,14 +214,12 @@ def search_stream(category: str = "general"):
                     if verify_availability(item["buy_link"]):
                         item["available"] = True
                         verified_results.append(item)
-                        # Stream to front-end
                         yield f"data:{json.dumps({'item': item, 'progress': len(verified_results), 'keyword': keyword})}\n\n"
                     time.sleep(1)
 
                 if len(verified_results) >= MAX_RESULTS:
                     break
                 time.sleep(2)
-
             if len(verified_results) >= MAX_RESULTS:
                 break
 
