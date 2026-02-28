@@ -15,8 +15,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------- CATEGORY KEYWORDS --------
-
 CATEGORY_QUERIES = {
     "general": ["montre", "sac", "chaussure", "écouteurs", "parfum"],
     "tech": ["iphone", "pc portable", "airpods", "samsung", "tablette"],
@@ -31,7 +29,10 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
-# -------- HELPERS --------
+MAX_RESULTS = 5
+MAX_KEYWORD_DEPTH = 3  # try keywords multiple times
+MAX_PER_SITE = 20      # scan deeper
+
 
 def extract_price(text):
     try:
@@ -62,7 +63,11 @@ def verify_availability(url):
         return False
 
 
-# -------- CDISCOUNT --------
+def compute_score(item):
+    item["money_saved"] = round(item["old_price"] - item["price"], 2)
+    item["score"] = (item["discount"] * 2) + (item["money_saved"] / 10)
+    return item
+
 
 def search_cdiscount(keyword):
     url = f"https://www.cdiscount.com/search/10/{keyword}.html"
@@ -74,7 +79,7 @@ def search_cdiscount(keyword):
 
         items = soup.select(".lpMain .prdtBloc")
 
-        for item in items[:10]:
+        for item in items[:MAX_PER_SITE]:
 
             title_tag = item.select_one(".prdtTitle")
             price_tag = item.select_one(".price")
@@ -101,22 +106,22 @@ def search_cdiscount(keyword):
             if link and not link.startswith("http"):
                 link = "https://www.cdiscount.com" + link
 
-            products.append({
+            product = {
                 "title": title_tag.text.strip(),
                 "price": price,
                 "old_price": round(old_price, 2),
                 "discount": discount,
                 "website": "Cdiscount",
                 "buy_link": link,
-            })
+            }
+
+            products.append(compute_score(product))
 
         return products
 
     except:
         return []
 
-
-# -------- RAKUTEN --------
 
 def search_rakuten(keyword):
     url = f"https://www.rakuten.fr/s/{keyword}"
@@ -128,7 +133,7 @@ def search_rakuten(keyword):
 
         items = soup.select(".search-result-item")
 
-        for item in items[:10]:
+        for item in items[:MAX_PER_SITE]:
 
             title_tag = item.select_one(".title")
             price_tag = item.select_one(".main-price")
@@ -155,22 +160,22 @@ def search_rakuten(keyword):
             if link and not link.startswith("http"):
                 link = "https://www.rakuten.fr" + link
 
-            products.append({
+            product = {
                 "title": title_tag.text.strip(),
                 "price": price,
                 "old_price": round(old_price, 2),
                 "discount": discount,
                 "website": "Rakuten",
                 "buy_link": link,
-            })
+            }
+
+            products.append(compute_score(product))
 
         return products
 
     except:
         return []
 
-
-# -------- MAIN SEARCH --------
 
 @app.get("/search")
 def search(category: str = "general"):
@@ -179,35 +184,39 @@ def search(category: str = "general"):
         category = "general"
 
     verified_results = []
+    scanned_count = 0
 
-    for keyword in CATEGORY_QUERIES[category]:
+    for depth in range(MAX_KEYWORD_DEPTH):
 
-        candidates = []
-        candidates.extend(search_cdiscount(keyword))
-        candidates.extend(search_rakuten(keyword))
+        for keyword in CATEGORY_QUERIES[category]:
 
-        # ---- Improved ranking ----
-        for item in candidates:
-            item["money_saved"] = round(item["old_price"] - item["price"], 2)
-            item["score"] = (item["discount"] * 2) + (item["money_saved"] / 10)
+            candidates = []
+            candidates.extend(search_cdiscount(keyword))
+            candidates.extend(search_rakuten(keyword))
 
-        candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
+            candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
 
-        # ---- Verification loop ----
-        for item in candidates:
+            for item in candidates:
 
-            if len(verified_results) >= 5:
+                if len(verified_results) >= MAX_RESULTS:
+                    break
+
+                if verify_availability(item["buy_link"]):
+                    item["available"] = True
+                    verified_results.append(item)
+
+                scanned_count += 1
+                time.sleep(1)
+
+            if len(verified_results) >= MAX_RESULTS:
                 break
 
-            if verify_availability(item["buy_link"]):
-                item["available"] = True
-                verified_results.append(item)
+            time.sleep(2)
 
-            time.sleep(1)
-
-        if len(verified_results) >= 5:
+        if len(verified_results) >= MAX_RESULTS:
             break
 
-        time.sleep(2)
-
-    return {"items": verified_results}
+    return {
+        "items": verified_results,
+        "scanned": scanned_count
+    }
