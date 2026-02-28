@@ -1,98 +1,106 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import os
 import requests
+from bs4 import BeautifulSoup
+import random
+import time
 
-# ----- CONFIG -----
-FRONTEND_URL = "https://glitchprice-finder-2oxjrj3s6-dbrckks-projects.vercel.app"  # Your frontend URL
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-MODEL = "llama-3.1-8b-instant"
-
-if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY environment variable not set")
-
-HEADERS = {
-    "Authorization": f"Bearer {GROQ_API_KEY}",
-    "Content-Type": "application/json",
-}
-
-# ----- APP SETUP -----
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],  # Only your frontend can call
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ----- MODELS -----
-class VerifyRequest(BaseModel):
-    url: str
+# -------- CATEGORY KEYWORDS --------
 
-# ----- ROUTES -----
-@app.get("/")
-def root():
-    return {"message": "GlitchPrice Finder backend is running."}
+CATEGORY_QUERIES = {
+    "general": ["montre", "sac", "chaussure", "écouteurs", "parfum"],
+    "tech": ["iphone", "pc portable", "airpods", "samsung", "tablette"],
+    "outfit": ["sneakers", "sac cuir", "veste", "robe", "lunettes"],
+    "jewelry": ["bague", "collier", "bracelet", "montre luxe", "parfum"],
+    "nearfree": ["accessoire", "destockage", "clearance", "fin de serie", "promo"],
+    "hugesaving": ["pc portable", "tv 4k", "iphone", "robot cuisine", "console"],
+    "forher": ["sac femme", "chaussures femme", "lingerie", "bijoux femme", "robe"]
+}
 
-@app.get("/glitches")
-def get_glitches(category: str = "all"):
-    prompt = f"Generate 5 keyword ideas for {category} products online deals."
-    payload = {
-        "model": MODEL,
-        "input": prompt,
-        "max_output_tokens": 200,
-    }
+# -------- WEBSITES (max 50 later) --------
 
-    response = requests.post("https://api.groq.com/v1/generate", headers=HEADERS, json=payload)
-    
-    if response.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Groq API error: {response.text}")
+WEBSITES = [
+    "https://www.cdiscount.com",
+    "https://www.fnac.com",
+    "https://www.rakuten.fr",
+    "https://www.boulanger.com",
+    "https://www.darty.com",
+]
 
-    data = response.json()
-    text = data.get("output_text", "")
-    keywords = [kw.strip() for kw in text.split(",") if kw.strip()]
+# -------- FAKE SEARCH SIMULATION (REAL SCRAPING LATER) --------
 
-    items = [
-        {
-            "name": kw,
-            "description": f"Keyword idea for {category}",
-            "savingsPercentage": 0,
-            "discountedPrice": 0,
-            "nextBestPrice": {"price": 0, "store": ""},
-            "url": "",
-            "category": category
-        }
-        for kw in keywords
-    ]
+def simulate_search(keyword, website):
+    """
+    Temporary simulation to make system functional.
+    Real scraping logic will replace this.
+    """
 
-    return {"category": category, "items": items}
+    price = random.randint(10, 500)
+    old_price = price + random.randint(20, 400)
 
-@app.post("/verify")
-def verify_item(req: VerifyRequest):
-    prompt = f"Verify if this product URL {req.url} is a good deal or glitch. Answer with 'verified' or 'unavailable' and a short reason."
-    payload = {
-        "model": MODEL,
-        "input": prompt,
-        "max_output_tokens": 50,
-    }
+    discount = round((old_price - price) / old_price * 100, 2)
 
-    response = requests.post("https://api.groq.com/v1/generate", headers=HEADERS, json=payload)
-    
-    if response.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Groq API error: {response.text}")
-
-    data = response.json()
-    text = data.get("output_text", "unavailable: could not verify")
-    
-    if ":" in text:
-        status, reason = [t.strip() for t in text.split(":", 1)]
-    else:
-        status, reason = "unavailable", text.strip()
+    if discount < 40:
+        return None
 
     return {
-        "status": status,
-        "reason": reason
+        "title": f"{keyword.title()} - {website.split('//')[1]}",
+        "price": price,
+        "old_price": old_price,
+        "discount": discount,
+        "website": website,
+        "buy_link": website,
+        "available": True
     }
+
+# -------- MAIN SEARCH ENDPOINT --------
+
+@app.get("/search")
+def search(category: str = "general"):
+
+    if category not in CATEGORY_QUERIES:
+        category = "general"
+
+    results = []
+
+    for keyword in CATEGORY_QUERIES[category]:
+
+        for website in WEBSITES:
+
+            if len(results) >= 5:
+                break
+
+            item = simulate_search(keyword, website)
+
+            if item:
+                results.append(item)
+
+            time.sleep(1)  # Slow scan to protect Render free
+
+        if len(results) >= 5:
+            break
+
+    # If no glitch found → return 2 best fallback
+    if len(results) == 0:
+        for i in range(2):
+            results.append({
+                "title": f"Fallback Item {i+1}",
+                "price": random.randint(50, 300),
+                "old_price": random.randint(400, 700),
+                "discount": 50,
+                "website": "Various",
+                "buy_link": "#",
+                "available": True
+            })
+
+    return {"items": results}
