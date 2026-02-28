@@ -15,8 +15,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------- CATEGORY KEYWORDS --------
-
 CATEGORY_QUERIES = {
     "general": ["montre", "sac", "chaussure", "écouteurs", "parfum"],
     "tech": ["iphone", "pc portable", "airpods", "samsung", "tablette"],
@@ -31,8 +29,6 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
-# -------- HELPERS --------
-
 def extract_price(text):
     try:
         text = text.replace("€", "").replace(",", ".")
@@ -42,7 +38,25 @@ def extract_price(text):
         return None
 
 
-# -------- CDISCOUNT --------
+def verify_availability(url):
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        if r.status_code != 200:
+            return False
+
+        text = r.text.lower()
+
+        if "indisponible" in text:
+            return False
+        if "rupture" in text:
+            return False
+        if "out of stock" in text:
+            return False
+
+        return True
+    except:
+        return False
+
 
 def search_cdiscount(keyword):
     url = f"https://www.cdiscount.com/search/10/{keyword}.html"
@@ -66,7 +80,6 @@ def search_cdiscount(keyword):
             if not price or price > 1000:
                 continue
 
-            # Try real old price if exists
             old_price_tag = item.select_one(".strike")
             if old_price_tag:
                 old_price = extract_price(old_price_tag.text)
@@ -89,7 +102,6 @@ def search_cdiscount(keyword):
                 "discount": discount,
                 "website": "Cdiscount",
                 "buy_link": link,
-                "available": True
             })
 
         return products
@@ -97,8 +109,6 @@ def search_cdiscount(keyword):
     except:
         return []
 
-
-# -------- RAKUTEN --------
 
 def search_rakuten(keyword):
     url = f"https://www.rakuten.fr/s/{keyword}"
@@ -144,7 +154,6 @@ def search_rakuten(keyword):
                 "discount": discount,
                 "website": "Rakuten",
                 "buy_link": link,
-                "available": True
             })
 
         return products
@@ -153,30 +162,37 @@ def search_rakuten(keyword):
         return []
 
 
-# -------- MAIN SEARCH --------
-
 @app.get("/search")
 def search(category: str = "general"):
 
     if category not in CATEGORY_QUERIES:
         category = "general"
 
-    results = []
+    verified_results = []
 
     for keyword in CATEGORY_QUERIES[category]:
 
-        # Cdiscount
-        results.extend(search_cdiscount(keyword))
+        candidates = []
+        candidates.extend(search_cdiscount(keyword))
+        candidates.extend(search_rakuten(keyword))
 
-        # Rakuten
-        results.extend(search_rakuten(keyword))
+        # sort best discount first
+        candidates = sorted(candidates, key=lambda x: x["discount"], reverse=True)
 
-        if len(results) >= 15:
+        for item in candidates:
+
+            if len(verified_results) >= 5:
+                break
+
+            if verify_availability(item["buy_link"]):
+                item["available"] = True
+                verified_results.append(item)
+
+            time.sleep(1)
+
+        if len(verified_results) >= 5:
             break
 
-        time.sleep(2)  # protect Render free
+        time.sleep(2)
 
-    # Sort by best discount
-    results = sorted(results, key=lambda x: x["discount"], reverse=True)
-
-    return {"items": results[:5]}
+    return {"items": verified_results}
