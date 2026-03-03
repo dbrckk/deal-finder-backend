@@ -1,18 +1,13 @@
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from bs4 import BeautifulSoup
 import requests
-import json
 import re
+import uuid
 import time
-from typing import List, Dict
+from typing import Dict, List
 
 app = FastAPI()
-
-# ==============================
-# CONFIG
-# ==============================
 
 FRONTEND_URL = "https://glitchprice-finder-2oxjrj3s6-dbrckks-projects.vercel.app"
 
@@ -24,27 +19,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MAX_ITEMS_PER_SITE = 3
-MAX_FINAL_ITEMS = 5
-
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    "User-Agent": "Mozilla/5.0"
 }
 
-# ==============================
-# CATEGORY KEYWORDS
-# ==============================
+MAX_ITEMS = 5
 
-KEYWORDS_BY_CATEGORY = {
-    "general": ["montre", "sac", "bijou", "chaussures", "parfum"],
-    "tech": ["smartphone", "ordinateur", "casque", "tablette", "console"],
-    "nearfree": ["porte clé", "coque téléphone", "mini gadget", "stylo"],
-    "forher": ["sac à main", "bijou femme", "lingerie", "parfum femme"],
-}
+# In-memory job storage
+jobs: Dict[str, Dict] = {}
 
-# ==============================
-# HELPER FUNCTIONS
-# ==============================
+# ======================
+# UTILITIES
+# ======================
 
 def clean_price(text: str) -> float:
     try:
@@ -60,8 +46,7 @@ def verify_product(link: str) -> bool:
         r = requests.get(link, headers=HEADERS, timeout=10)
         if r.status_code != 200:
             return False
-        content = r.text.lower()
-        if "indisponible" in content or "rupture" in content:
+        if "indisponible" in r.text.lower():
             return False
         return True
     except:
@@ -84,25 +69,21 @@ def build_item(title, price, old_price, link, website):
         "money_saved": money_saved,
         "website": website,
         "buy_link": link,
-        "available": True,
-        "coupon": None,
-        "cashback": None,
         "score": discount + money_saved
     }
 
-
-# ==============================
+# ======================
 # SCRAPERS
-# ==============================
+# ======================
 
 def scrape_amazon(keyword):
-    url = f"https://www.amazon.fr/s?k={keyword}"
     items = []
     try:
+        url = f"https://www.amazon.fr/s?k={keyword}"
         r = requests.get(url, headers=HEADERS, timeout=15)
         soup = BeautifulSoup(r.text, "lxml")
 
-        for card in soup.select(".s-result-item")[:MAX_ITEMS_PER_SITE]:
+        for card in soup.select(".s-result-item")[:3]:
             title_tag = card.select_one("h2 a span")
             price_whole = card.select_one(".a-price-whole")
             price_frac = card.select_one(".a-price-fraction")
@@ -114,8 +95,7 @@ def scrape_amazon(keyword):
             price = clean_price(price_whole.text + "." + price_frac.text)
             link = "https://www.amazon.fr" + card.select_one("h2 a")["href"]
 
-            item = build_item(title, price, price, link, "Amazon FR")
-            items.append(item)
+            items.append(build_item(title, price, price, link, "Amazon FR"))
 
     except:
         pass
@@ -124,13 +104,13 @@ def scrape_amazon(keyword):
 
 
 def scrape_ebay(keyword):
-    url = f"https://www.ebay.fr/sch/i.html?_nkw={keyword}"
     items = []
     try:
+        url = f"https://www.ebay.fr/sch/i.html?_nkw={keyword}"
         r = requests.get(url, headers=HEADERS, timeout=15)
         soup = BeautifulSoup(r.text, "lxml")
 
-        for card in soup.select(".s-item")[:MAX_ITEMS_PER_SITE]:
+        for card in soup.select(".s-item")[:3]:
             title_tag = card.select_one(".s-item__title")
             price_tag = card.select_one(".s-item__price")
             link_tag = card.select_one(".s-item__link")
@@ -142,62 +122,25 @@ def scrape_ebay(keyword):
             price = clean_price(price_tag.text)
             link = link_tag["href"]
 
-            item = build_item(title, price, price, link, "eBay FR")
-            items.append(item)
+            items.append(build_item(title, price, price, link, "eBay FR"))
 
     except:
         pass
 
     return items
 
+SCRAPERS = [scrape_amazon, scrape_ebay]
 
-def scrape_cdiscount(keyword):
-    url = f"https://www.cdiscount.com/search/10/{keyword}.html"
-    items = []
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        soup = BeautifulSoup(r.text, "lxml")
+KEYWORDS = ["montre", "sac", "bijou", "chaussures", "parfum"]
 
-        for card in soup.select(".prdtBloc")[:MAX_ITEMS_PER_SITE]:
-            title_tag = card.select_one(".prdtTitle a")
-            price_tag = card.select_one(".price")
+# ======================
+# BACKGROUND SCAN
+# ======================
 
-            if not title_tag or not price_tag:
-                continue
+def run_scan(job_id: str):
+    found_items: List[Dict] = []
 
-            title = title_tag.text.strip()
-            price = clean_price(price_tag.text)
-            link = title_tag["href"]
-
-            item = build_item(title, price, price, link, "Cdiscount")
-            items.append(item)
-
-    except:
-        pass
-
-    return items
-
-
-# ==============================
-# WEBSITE LIST
-# ==============================
-
-SCRAPERS = [
-    scrape_amazon,
-    scrape_ebay,
-    scrape_cdiscount,
-]
-
-# ==============================
-# SSE STREAM
-# ==============================
-
-def stream_results(category: str):
-
-    keywords = KEYWORDS_BY_CATEGORY.get(category, KEYWORDS_BY_CATEGORY["general"])
-    found_items = []
-
-    for keyword in keywords:
+    for keyword in KEYWORDS:
         for scraper in SCRAPERS:
 
             results = scraper(keyword)
@@ -209,41 +152,44 @@ def stream_results(category: str):
 
                 found_items.append(item)
 
-                # Sort best first
                 found_items = sorted(
                     found_items,
                     key=lambda x: x["score"],
                     reverse=True
-                )
+                )[:MAX_ITEMS]
 
-                found_items = found_items[:MAX_FINAL_ITEMS]
+                jobs[job_id]["items"] = found_items
 
-                yield f"data:{json.dumps({'item': item})}\n\n"
+                time.sleep(2)  # slow scan intentionally
 
-                if len(found_items) >= MAX_FINAL_ITEMS:
-                    break
+    jobs[job_id]["finished"] = True
 
-            if len(found_items) >= MAX_FINAL_ITEMS:
-                break
-
-        if len(found_items) >= MAX_FINAL_ITEMS:
-            break
-
-    yield f"data:{json.dumps({'finished': True})}\n\n"
-
-
-# ==============================
+# ======================
 # ROUTES
-# ==============================
+# ======================
 
-@app.get("/search_stream")
-async def search_stream(category: str = "general"):
-    return StreamingResponse(
-        stream_results(category),
-        media_type="text/event-stream"
-    )
+@app.post("/start_scan")
+def start_scan(background_tasks: BackgroundTasks):
+    job_id = str(uuid.uuid4())
+
+    jobs[job_id] = {
+        "items": [],
+        "finished": False
+    }
+
+    background_tasks.add_task(run_scan, job_id)
+
+    return {"job_id": job_id}
+
+
+@app.get("/scan_status/{job_id}")
+def scan_status(job_id: str):
+    if job_id not in jobs:
+        return {"error": "Job not found"}
+
+    return jobs[job_id]
 
 
 @app.get("/health")
-async def health():
+def health():
     return {"status": "ok"}
